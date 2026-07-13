@@ -1,0 +1,12 @@
+# Conftest configuration - run from repo root as:
+#   conftest test --config policy/conftest/conftest.toml <plan.json | k8s-manifest.yaml>
+#
+# Namespaces map 1:1 to the control families enforced at PR review:
+#   containers.no_root -> no root containers (Kubernetes manifests)
+#   iam.imdsv2         -> IMDSv2 enforced on EC2 (Terraform plan JSON)
+#   network.no_open_sg -> no 0.0.0.0/0 security groups (Terraform plan JSON)
+
+policy = "policy/opa"
+namespace = ["containers.no_root", "iam.imdsv2", "network.no_open_sg"]
+fail-on-warn = true
+no-color = false

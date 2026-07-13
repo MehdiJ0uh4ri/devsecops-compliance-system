@@ -1,0 +1,240 @@
+name: DevSecOps Pipeline
+
+# Shift-left gate: every PR runs SAST, SCA/container scan, secrets scan, SBOM
+# generation, IaC policy-as-code, and (post-deploy-to-ephemeral-env) DAST.
+# Noise-reduced triage means the pipeline fails ONLY on:
+#   - a CRITICAL, non-allowlisted, unpatched vulnerability (security/triage/triage.py)
+#   - a policy-as-code violation (root containers / IMDSv1 / open security groups)
+#   - a live (non-fixture) secret detected by gitleaks
+# Everything else is reported as a PR annotation, not a build-breaker.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write # upload SARIF to code scanning
+  pull-requests: write   # PR comments for policy-gate / triage summaries
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secrets-scan:
+    name: Secrets scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # gitleaks needs full history to scan past commits on a PR
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: security/secrets/gitleaks.toml
+          GITLEAKS_EXIT_CODE: "1" # any live secret hard-fails the job, no severity tiering here
+
+  sast-semgrep:
+    name: SAST (Semgrep)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Semgrep
+        uses: semgrep/semgrep-action@v1
+        with:
+          config: >-
+            security/sast/semgrep-rules
+            p/owasp-top-ten
+            p/ci
+          generateSarif: "1"
+        env:
+          SEMGREP_RULES: security/sast/semgrep-rules
+      - name: Upload SARIF to code scanning
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+
+  sca-sbom-container-scan:
+    name: SCA + SBOM + container scan (Trivy, Syft)
+    runs-on: ubuntu-latest
+    outputs:
+      triage-exit: ${{ steps.triage.outputs.exit_code }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t sample-app:${{ github.sha }} sample-app/
+
+      - name: Generate SBOM (Syft, CycloneDX)
+        uses: anchore/sbom-action@v0.17.2
+        with:
+          image: sample-app:${{ github.sha }}
+          format: cyclonedx-json
+          output-file: sbom.cyclonedx.json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ github.sha }}
+          path: sbom.cyclonedx.json
+          retention-days: 365 # SOC2 evidence retention, see compliance/soc2/control-matrix.csv
+
+      - name: Trivy image scan (JSON for triage)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: sample-app:${{ github.sha }}
+          format: json
+          output: trivy-results.json
+          severity: "MEDIUM,HIGH,CRITICAL"
+          ignore-unfixed: false
+
+      - name: Trivy image scan (SARIF for code scanning UI)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: sample-app:${{ github.sha }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: "MEDIUM,HIGH,CRITICAL"
+
+      - name: Upload SARIF to code scanning
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install triage dependencies
+        run: pip install pyyaml
+
+      - name: Noise-reduced CVE triage
+        id: triage
+        run: |
+          set +e
+          python security/triage/triage.py \
+            --allowlist security/triage/cve-allowlist.yml \
+            --report-out triage-report.json \
+            trivy-results.json
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Upload triage report (compliance evidence)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: triage-report-${{ github.sha }}
+          path: triage-report.json
+          retention-days: 365
+
+      - name: Fail on blocking CRITICAL findings
+        if: steps.triage.outputs.exit_code != '0'
+        run: |
+          echo "::error::Triage found blocking CRITICAL, unpatched, non-allowlisted vulnerabilities. See triage-report.json artifact."
+          exit 1
+
+  policy-gate:
+    name: Policy-as-code gate (OPA / Conftest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup OPA
+        uses: open-policy-agent/setup-opa@v2
+        with:
+          version: latest
+
+      - name: OPA unit tests (policy correctness)
+        run: opa test policy/opa -v
+
+      - name: Setup Terraform
+        if: hashFiles('infra/**/*.tf') != ''
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform plan -> JSON
+        if: hashFiles('infra/**/*.tf') != ''
+        working-directory: infra
+        run: |
+          terraform init -backend=false
+          terraform plan -out plan.tfplan
+          terraform show -json plan.tfplan > ../plan.json
+
+      - name: Install conftest
+        run: |
+          curl -sL https://github.com/open-policy-agent/conftest/releases/latest/download/conftest_$(uname -s)_x86_64.tar.gz -o conftest.tar.gz
+          tar xzf conftest.tar.gz conftest
+          sudo mv conftest /usr/local/bin
+
+      - name: Conftest - Terraform plan (IMDSv2, security groups)
+        if: hashFiles('infra/**/*.tf') != ''
+        run: conftest test --config policy/conftest/conftest.toml plan.json
+
+      - name: Conftest - Kubernetes manifests (no root containers)
+        if: hashFiles('k8s/**/*.yaml') != ''
+        run: conftest test --config policy/conftest/conftest.toml k8s/
+
+  dast-zap:
+    name: DAST (OWASP ZAP baseline)
+    runs-on: ubuntu-latest
+    needs: [sca-sbom-container-scan]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start target app
+        run: |
+          docker build -t sample-app:${{ github.sha }} sample-app/
+          docker run -d --rm -p 8080:8080 --name sample-app sample-app:${{ github.sha }}
+          for i in $(seq 1 15); do curl -sf http://localhost:8080/healthz && break || sleep 2; done
+
+      - name: ZAP baseline scan
+        uses: zaproxy/action-baseline@v0.12.0
+        with:
+          target: "http://localhost:8080"
+          rules_file_name: "security/dast/zap-rules.tsv"
+          cmd_options: "-a"
+          fail_action: true # WARN entries in zap-rules.tsv don't fail; FAIL entries do
+
+      - name: Stop target app
+        if: always()
+        run: docker stop sample-app || true
+
+  triage-summary-comment:
+    name: Post triage + policy summary to PR
+    runs-on: ubuntu-latest
+    needs: [secrets-scan, sast-semgrep, sca-sbom-container-scan, policy-gate]
+    if: always() && github.event_name == 'pull_request'
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: triage-report-${{ github.sha }}
+        continue-on-error: true
+      - name: Comment summary
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body = '## DevSecOps Pipeline Summary\n\n';
+            body += `| Job | Result |\n|---|---|\n`;
+            body += `| Secrets scan | ${{ needs.secrets-scan.result }} |\n`;
+            body += `| SAST (Semgrep) | ${{ needs.sast-semgrep.result }} |\n`;
+            body += `| SCA/SBOM/Container | ${{ needs.sca-sbom-container-scan.result }} |\n`;
+            body += `| Policy gate (OPA) | ${{ needs.policy-gate.result }} |\n`;
+            if (fs.existsSync('triage-report.json')) {
+              const r = JSON.parse(fs.readFileSync('triage-report.json'));
+              body += `\n**Triage:** ${r.summary.total_findings} findings, ` +
+                      `${r.summary.blocking_critical} blocking CRITICAL, ` +
+                      `${r.summary.allowlisted} allowlisted, ` +
+                      `${r.summary.expired_allowlist_entries} expired-allowlist entries.\n`;
+            }
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body,
+            });

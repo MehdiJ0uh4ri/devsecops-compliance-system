@@ -1,0 +1,11 @@
+# Ownership -> accountability, referenced by SOC2 controls CC1.5 and CC2.4
+# (compliance/soc2/control-matrix.csv). Every directory with security or
+# compliance impact requires review from the team accountable for it, not
+# just any maintainer.
+
+/policy/                        @platform-security
+/security/                      @platform-security
+/iam/                           @platform-security
+/compliance/                    @platform-security @eng-leadership
+/.github/workflows/             @platform-security
+/.pre-commit-config.yaml        @platform-security

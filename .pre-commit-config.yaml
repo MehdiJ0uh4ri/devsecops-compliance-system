@@ -1,0 +1,55 @@
+# pre-commit install
+# pre-commit run --all-files
+#
+# Shift-left mirror of the CI pipeline: the same three classes of finding that
+# block a PR (secrets, SAST, IaC misconfig) are caught locally before the
+# commit ever leaves the developer's machine.
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+      - id: detect-private-key
+      - id: check-yaml
+        args: ["--allow-multiple-documents"]
+      - id: check-json
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.4
+    hooks:
+      - id: gitleaks
+        name: gitleaks (secret scanning)
+        entry: gitleaks protect --staged --verbose --redact --config=security/secrets/gitleaks.toml
+        language: golang
+
+  - repo: https://github.com/returntocorp/semgrep
+    rev: v1.78.0
+    hooks:
+      - id: semgrep
+        name: semgrep (SAST, fast local ruleset)
+        args:
+          - "--config=security/sast/semgrep-rules"
+          - "--config=p/secrets"
+          - "--error"
+          - "--metrics=off"
+
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: v1.90.0
+    hooks:
+      - id: terraform_fmt
+      - id: terraform_validate
+      - id: terraform_tflint
+
+  - repo: local
+    hooks:
+      - id: opa-policy-test
+        name: opa test (policy-as-code unit tests)
+        entry: opa test policy/opa
+        language: system
+        pass_filenames: false
+        files: ^policy/opa/.*\.rego$

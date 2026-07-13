@@ -1,0 +1,24 @@
+# OWASP ZAP baseline scan rule config.
+# Format: <rule-id>	<threshold: IGNORE|WARN|FAIL>	<comment>
+#
+# Philosophy matches security/triage/triage.py: don't fail the build on every
+# informational finding. FAIL is reserved for issues with a clear, exploitable
+# security impact; everything else is WARN (annotated on the PR, non-blocking)
+# or IGNORE (known noise for this app's architecture).
+
+10021	WARN	X-Content-Type-Options header missing - low severity, track but don't block
+10020	FAIL	X-Frame-Options header missing - clickjacking risk
+10035	FAIL	Strict-Transport-Security header missing - forces plaintext downgrade possible
+10038	FAIL	Content Security Policy header missing
+40012	FAIL	Cross Site Scripting (Reflected)
+40014	FAIL	Cross Site Scripting (Persistent)
+40018	FAIL	SQL Injection
+40019	FAIL	SQL Injection - MySQL
+40020	FAIL	SQL Injection - Hypersonic SQL
+40021	FAIL	SQL Injection - Oracle
+40022	FAIL	SQL Injection - PostgreSQL
+90019	FAIL	Server Side Code Injection
+90020	FAIL	Remote OS Command Injection
+2	IGNORE	Private IP disclosure - expected in ephemeral CI test environment
+10015	IGNORE	Re-examine Cache-control directives - not applicable to API-only sample app
+10096	WARN	Timestamp disclosure - informational, low impact

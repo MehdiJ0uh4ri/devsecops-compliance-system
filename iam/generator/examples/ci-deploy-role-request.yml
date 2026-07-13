@@ -1,0 +1,28 @@
+# Example input to generate_policy.py.
+# Run: python generate_policy.py examples/ci-deploy-role-request.yml --out-dir examples/out
+
+role_name: ci-deploy-sample-app
+requester: platform-team@example.com
+justification: >
+  GitHub Actions OIDC role used by the pipeline job to push built images to
+  ECR and update the ECS service. Scoped to one repo/service, not account-wide.
+
+actions:
+  - ecr:GetAuthorizationToken
+  - ecr:BatchCheckLayerAvailability
+  - ecr:PutImage
+  - ecr:InitiateLayerUpload
+  - ecr:UploadLayerPart
+  - ecr:CompleteLayerUpload
+  - ecs:UpdateService
+  - ecs:DescribeServices
+
+resources:
+  - "arn:aws:ecr:eu-west-1:123456789012:repository/sample-app"
+  - "arn:aws:ecs:eu-west-1:123456789012:service/sample-app-cluster/sample-app"
+
+max_session_duration_minutes: 20
+trusted_principals:
+  - "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
+require_mfa: false # CI/OIDC role - MFA is not meaningful for a workload identity
+allow_wildcard_resource: true # ecr:GetAuthorizationToken only supports Resource: "*" in IAM

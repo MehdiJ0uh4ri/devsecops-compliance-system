@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "IAM Role Request",
+  "description": "Input contract for generate_policy.py - a developer/service declares what it needs, not what IAM syntax to write.",
+  "type": "object",
+  "required": ["role_name", "actions", "resources", "requester"],
+  "properties": {
+    "role_name": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9+=,.@_-]{1,64}$"
+    },
+    "requester": {
+      "type": "string",
+      "description": "Email or team handle accountable for this role - written into the policy Sid and evidence log."
+    },
+    "justification": {
+      "type": "string",
+      "description": "Why this access is needed (fed into the compliance evidence log, SOC2 CC6.3 least-privilege review)."
+    },
+    "actions": {
+      "type": "array",
+      "description": "IAM actions in service:Action form, e.g. s3:GetObject. Wildcards (service:*, *) are rejected - see NO_WILDCARD_ACTIONS.",
+      "items": {"type": "string", "pattern": "^[a-zA-Z0-9]+:[a-zA-Z0-9*]+$"},
+      "minItems": 1
+    },
+    "resources": {
+      "type": "array",
+      "description": "Fully-qualified ARNs (or ARN patterns with the account/region filled in). A bare \"*\" is rejected unless allow_wildcard_resource is explicitly set for an action that has no ARN grammar (e.g. s3:ListAllMyBuckets).",
+      "items": {"type": "string"},
+      "minItems": 1
+    },
+    "allow_wildcard_resource": {
+      "type": "boolean",
+      "default": false,
+      "description": "Escape hatch for the small set of IAM actions that only support resource:\"*\" (e.g. ec2:DescribeInstances). Requires an explicit true; the generator will otherwise refuse actions with no matching resource ARN."
+    },
+    "max_session_duration_minutes": {
+      "type": "integer",
+      "minimum": 15,
+      "maximum": 720,
+      "default": 60,
+      "description": "Time-limited session enforced via sts:AssumeRole MaxSessionDuration and a policy condition - not just a suggestion in a README."
+    },
+    "trusted_principals": {
+      "type": "array",
+      "description": "Principal ARNs (users, roles, or an OIDC-federated principal) allowed to assume this role.",
+      "items": {"type": "string"},
+      "minItems": 1
+    },
+    "require_mfa": {
+      "type": "boolean",
+      "default": true
+    },
+    "source_ip_allowlist": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Optional CIDR allowlist enforced via aws:SourceIp condition, for break-glass/human roles (omit for CI/OIDC roles where the source IP is not meaningful)."
+    }
+  }
+}

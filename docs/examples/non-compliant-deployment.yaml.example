@@ -1,0 +1,26 @@
+# NOT scanned by CI (the .example extension keeps it out of k8s/**/*.yaml).
+# Reference only: this is what policy/opa/containers/no_root.rego blocks at
+# PR review, and why. Diff against k8s/deployment.yaml to see the fix.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bad-example
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bad-example
+  template:
+    metadata:
+      labels:
+        app: bad-example
+    spec:
+      # no pod-level securityContext.runAsNonRoot -> falls through to the
+      # per-container check below, which also fails
+      containers:
+        - name: bad-example
+          image: bad-example:latest
+          securityContext:
+            privileged: true              # blocked: "must not run privileged"
+            runAsUser: 0                  # blocked: "must not set runAsUser: 0 (root)"
+            allowPrivilegeEscalation: true # blocked: "must set allowPrivilegeEscalation=false"

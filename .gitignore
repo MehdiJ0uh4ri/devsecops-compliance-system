@@ -1,0 +1,25 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+!terraform.tfvars.example
+plan.tfplan
+plan.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Scan/evidence output (generated, not source)
+evidence-package/
+triage-report.json
+trivy-results.json
+trivy-results.sarif
+semgrep.sarif
+sbom.cyclonedx.json
+
+# Editor
+.vscode/
+.idea/
