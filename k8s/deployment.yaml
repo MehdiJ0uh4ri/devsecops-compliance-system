@@ -1,7 +1,3 @@
-# Deployment manifest for sample-app. Deliberately compliant with
-# policy/opa/containers/no_root.rego - this is the PR-gate golden path.
-# See docs/examples/non-compliant-deployment.yaml.example for what the
-# same policy blocks.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
